@@ -967,13 +967,23 @@
             </div>
           </div>
 
-          <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
-            <button id="btnCancelModal" type="button" class="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700">
-              Đóng
-            </button>
-            <button type="submit" class="px-4 py-2 rounded-lg text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white shadow-md">
-              Lưu Ý kiến Xét duyệt vào Bảng Tổng hợp
-            </button>
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200">
+            <div>
+              <button id="btnDeleteMyReviewModal" type="button"
+                      class="hidden px-3.5 py-2 rounded-lg text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 transition flex items-center gap-1.5 shadow-2xs"
+                      title="Hủy/xóa phiếu ý kiến xét duyệt của bạn đối với nhiệm vụ này và đưa về trạng thái chưa thẩm định">
+                <svg class="w-4 h-4 text-rose-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                <span>Hủy/Rút ý kiến của tôi</span>
+              </button>
+            </div>
+            <div class="flex items-center gap-2 ml-auto">
+              <button id="btnCancelModal" type="button" class="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition">
+                Đóng
+              </button>
+              <button type="submit" class="px-4 py-2 rounded-lg text-xs font-bold bg-blue-900 hover:bg-blue-800 text-white shadow-md transition">
+                Lưu Ý kiến Xét duyệt vào Bảng Tổng hợp
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -2470,6 +2480,7 @@
       // Load authenticated member's personal review if already given
       const myRev = allTaskRevs.find(r => r.reviewer === state.currentMember || r.reviewer_id === getMemberId(state.currentMember));
       const statusNoticeEl = document.getElementById('myReviewStatusNotice');
+      const btnDelMyRev = document.getElementById('btnDeleteMyReviewModal');
 
       if (myRev) {
         document.getElementById('formStatus').value = myRev.status || 'Đề nghị phê duyệt';
@@ -2479,6 +2490,11 @@
         if (statusNoticeEl) {
           statusNoticeEl.innerHTML = `<span class="text-emerald-700 font-bold">✓ Quý Thầy/Cô đã cho ý kiến lúc ${myRev.updated_at}. Bạn có thể chỉnh sửa và bấm lưu để cập nhật ý kiến của mình.</span>`;
         }
+        if (btnDelMyRev) {
+          btnDelMyRev.classList.remove('hidden');
+          btnDelMyRev.setAttribute('data-target-uid', task.uid);
+          btnDelMyRev.setAttribute('data-target-key', myRev.review_key || `${task.uid}__${getMemberId(state.currentMember)}`);
+        }
       } else {
         document.getElementById('formStatus').value = 'Đề nghị phê duyệt';
         document.getElementById('formComment').value = '';
@@ -2486,6 +2502,11 @@
         document.getElementById('formProposedBudget').value = task.budget || 0;
         if (statusNoticeEl) {
           statusNoticeEl.innerHTML = `<span class="text-blue-700 italic">Quý Thầy/Cô chưa cho ý kiến về nhiệm vụ này. Vui lòng nhập nội dung đánh giá và khuyến nghị bên dưới.</span>`;
+        }
+        if (btnDelMyRev) {
+          btnDelMyRev.classList.add('hidden');
+          btnDelMyRev.removeAttribute('data-target-uid');
+          btnDelMyRev.removeAttribute('data-target-key');
         }
       }
 
@@ -3240,6 +3261,34 @@ function testDoPost() {
       // Modal close & form submit
       document.getElementById('btnCloseModal').addEventListener('click', closeTaskModal);
       document.getElementById('btnCancelModal').addEventListener('click', closeTaskModal);
+
+      const btnDelModal = document.getElementById('btnDeleteMyReviewModal');
+      if (btnDelModal) {
+        btnDelModal.addEventListener('click', () => {
+          const uid = btnDelModal.getAttribute('data-target-uid');
+          const task = TASKS_DATA.find(t => t.uid === uid);
+          if (!task) return;
+
+          const reviewerId = getMemberId(state.currentMember);
+          const key = btnDelModal.getAttribute('data-target-key') || `${task.uid}__${reviewerId}`;
+          const rev = state.reviews[key];
+          if (!rev) return;
+
+          const confirmMsg = `Quý Thầy/Cô có chắc chắn muốn HỦY/RÚT toàn bộ ý kiến xét duyệt của mình đối với nhiệm vụ:\n\n[#${task.id} - ${task.code}] ${task.title}\n\nSau khi hủy, nhiệm vụ này sẽ quay trở về trạng thái CHƯA XÉT DUYỆT.`;
+
+          if (window.confirm(confirmMsg)) {
+            state.deletedKeys[key] = true;
+            const removed = state.reviews[key];
+            delete state.reviews[key];
+            saveReviewsToStorage();
+            syncToGoogleSheet('deleteReview', removed);
+            renderTasksTable();
+            renderReviewsTable();
+            closeTaskModal();
+            showToast(`Đã hủy ý kiến của bạn đối với nhiệm vụ #${task.id}! Nhiệm vụ đã trở về trạng thái chưa xét duyệt.`);
+          }
+        });
+      }
       document.getElementById('councilReviewForm').addEventListener('submit', (e) => {
         e.preventDefault();
         const uid = document.getElementById('formTaskUid').value;
