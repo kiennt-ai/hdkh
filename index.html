@@ -181,8 +181,8 @@
             <span class="text-xs font-medium text-amber-300 whitespace-nowrap pl-1">Thành viên HĐ:</span>
             <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-amber-300 border border-slate-600 text-xs font-semibold shadow-inner">
               <svg class="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-              <span id="headerCurrentMemberLabel">PGS.TS. Phạm Xuân Dương (Chủ tịch Hội đồng)</span>
-              <span id="headerMemberBadge" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-400 text-slate-950 uppercase shrink-0">Đã xác thực</span>
+              <span id="headerCurrentMemberLabel">Chưa xác thực</span>
+              <span id="headerMemberBadge" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-600 text-slate-200 uppercase shrink-0">Chờ xác thực</span>
               <span id="sessionCountdownBadge" class="hidden px-2 py-0.5 rounded text-[10px] font-mono tabular-nums font-bold bg-slate-800 text-amber-300 border border-slate-600 shrink-0" title="Thời gian phiên làm việc còn lại (tối đa 20 phút/phiên)">⏱️ Còn 20:00</span>
             </div>
             <!-- Hidden select retained for DOM element integrity -->
@@ -1124,6 +1124,7 @@
     const GOOGLE_SHEET_ID = '1lEc4zhr6qnOBKDBvhyuNgDd_2nhfWiNHBKAjCdNuDg0';
     const STORAGE_KEY_REVIEWS = 'vmu_khcn_2026_2027_reviews_v3';
     const STORAGE_KEY_AUTH = 'vmu_khcn_2026_2027_auth_v1';
+    const STORAGE_KEY_LAST_MEMBER = 'vmu_khcn_2026_2027_last_member_v1';
     const STORAGE_KEY_PASS = 'vmu_khcn_2026_2027_pass_v1';
     const STORAGE_KEY_GAS_URL = 'vmu_khcn_2026_2027_gas_url_v1';
     const STORAGE_KEY_AUTOSYNC = 'vmu_khcn_2026_2027_autosync_v1';
@@ -1149,7 +1150,8 @@
       deletedUids: {},
       gasWebhookUrl: '',
       isAuthenticated: false,
-      currentMember: 'PGS.TS. Phạm Xuân Dương - Chủ tịch Hội đồng (Ban Giám hiệu)',
+      currentMember: '',
+      rememberMe: true,
       syncState: 'ready',
       autoSyncEnabled: false,
       autoSyncIntervalSec: 60,
@@ -1161,8 +1163,9 @@
     };
     let autoSyncTimerId = null;
 
-    // 20-Minute Session Security Management
-    const SESSION_DURATION_MS = 20 * 60 * 1000; // 20 minutes max session
+    // Quản lý Phiên làm việc & Bảo mật (20 phút cho phiên tạm, 7 ngày cho phiên duy trì)
+    const SESSION_DURATION_MS = 20 * 60 * 1000;
+    const REMEMBER_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
     let sessionIntervalId = null;
 
     function startSessionTimer() {
@@ -1173,8 +1176,9 @@
           clearInterval(sessionIntervalId);
           return;
         }
+        const maxDur = state.rememberMe ? REMEMBER_DURATION_MS : SESSION_DURATION_MS;
         const elapsed = Date.now() - (state.loginTime || Date.now());
-        const remainingSec = Math.max(0, Math.floor((SESSION_DURATION_MS - elapsed) / 1000));
+        const remainingSec = Math.max(0, Math.floor((maxDur - elapsed) / 1000));
         updateSessionCountdownUI(remainingSec);
         if (remainingSec <= 0) {
           clearInterval(sessionIntervalId);
@@ -1191,6 +1195,16 @@
         return;
       }
       if (el.classList.contains('hidden')) el.classList.remove('hidden');
+
+      if (state.rememberMe) {
+        if (el.textContent !== '🟢 Duy trì đăng nhập') {
+          el.textContent = '🟢 Duy trì đăng nhập';
+          el.className = 'px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-600 shrink-0';
+          el.setAttribute('title', 'Phiên làm việc được duy trì an toàn trên trình duyệt này');
+        }
+        return;
+      }
+
       const sec = remainingSec !== undefined ? remainingSec : Math.max(0, Math.floor((SESSION_DURATION_MS - (Date.now() - (state.loginTime || Date.now()))) / 1000));
       const m = Math.floor(sec / 60);
       const s = sec % 60;
@@ -1211,10 +1225,16 @@
 
     function expireSession() {
       state.isAuthenticated = false;
-      writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({ authenticated: false }));
+      writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({
+        authenticated: false,
+        member: state.currentMember
+      }));
+      if (state.currentMember) {
+        writeMultiStorage(STORAGE_KEY_LAST_MEMBER, state.currentMember);
+      }
       const errEl = document.getElementById('authErrorMsg');
       if (errEl) {
-        errEl.textContent = '⏱️ Phiên làm việc đã hết hạn (tối đa 20 phút bảo mật). Vui lòng đăng nhập lại để tiếp tục!';
+        errEl.textContent = '⏱️ Phiên làm việc đã hết hạn. Vui lòng nhập mật khẩu để mở khóa tiếp tục!';
         errEl.classList.remove('hidden');
       }
       const authOverlay = document.getElementById('authGateOverlay');
@@ -1222,8 +1242,73 @@
         authOverlay.classList.remove('hidden');
         authOverlay.classList.add('flex');
       }
+      populateCouncilSelects();
       applyRoleBasedPermissions();
-      showToast('Phiên làm việc đã hết hạn (tối đa 20 phút). Vui lòng đăng nhập lại!');
+      showToast('Phiên làm việc đã hết hạn. Vui lòng nhập mật khẩu để tiếp tục!');
+    }
+
+    function initAuthSession() {
+      const authOverlay = document.getElementById('authGateOverlay');
+      const savedAuthStr = readMultiStorage(STORAGE_KEY_AUTH);
+      const savedLastMember = readMultiStorage(STORAGE_KEY_LAST_MEMBER);
+
+      let isAuthenticated = false;
+      let activeMember = '';
+      let isRemembered = true;
+
+      if (savedAuthStr) {
+        try {
+          const parsed = JSON.parse(savedAuthStr);
+          if (parsed && typeof parsed.rememberMe === 'boolean') {
+            isRemembered = parsed.rememberMe;
+          }
+          if (parsed && parsed.authenticated && parsed.member) {
+            const loginTime = parsed.loginTime || 0;
+            const elapsed = Date.now() - loginTime;
+            const maxDuration = isRemembered ? REMEMBER_DURATION_MS : SESSION_DURATION_MS;
+
+            if (elapsed < maxDuration) {
+              isAuthenticated = true;
+              activeMember = parsed.member;
+              state.loginTime = isRemembered ? Date.now() : loginTime;
+            } else {
+              writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({
+                authenticated: false,
+                member: parsed.member
+              }));
+              activeMember = parsed.member;
+              const errEl = document.getElementById('authErrorMsg');
+              if (errEl) {
+                errEl.textContent = '⏱️ Phiên làm việc trước đó đã hết hạn. Vui lòng nhập lại mật khẩu để tiếp tục!';
+                errEl.classList.remove('hidden');
+              }
+            }
+          } else if (parsed && parsed.member) {
+            activeMember = parsed.member;
+          }
+        } catch (e) {}
+      }
+
+      if (!activeMember && savedLastMember) {
+        activeMember = savedLastMember;
+      }
+
+      state.isAuthenticated = isAuthenticated;
+      state.currentMember = activeMember || '';
+      state.rememberMe = isRemembered;
+
+      if (isAuthenticated) {
+        if (authOverlay) {
+          authOverlay.classList.add('hidden');
+          authOverlay.classList.remove('flex');
+        }
+        startSessionTimer();
+      } else {
+        if (authOverlay) {
+          authOverlay.classList.remove('hidden');
+          authOverlay.classList.add('flex');
+        }
+      }
     }
 
     // Multi-Reviewer Task Aggregation Helper without Overwriting
@@ -1878,12 +1963,26 @@
 
       if (topSelect) topSelect.innerHTML = optionsHtml;
       if (modalSelect) modalSelect.innerHTML = optionsHtml;
-      if (authSelect) authSelect.innerHTML = optionsHtml;
+
+      if (authSelect) {
+        authSelect.innerHTML = `
+          <option value="" disabled ${!state.currentMember ? 'selected' : ''}>-- Vui lòng chọn đúng tên Thành viên Hội đồng --</option>
+          ${COUNCIL_MEMBERS.map(m => {
+            const label = `${m.name} - ${m.role} (${m.unit})`;
+            const isSel = (state.currentMember === label) ? 'selected' : '';
+            return `<option value="${label}" ${isSel}>${label}</option>`;
+          }).join('')}
+        `;
+        if (state.currentMember) {
+          authSelect.value = state.currentMember;
+        }
+      }
 
       if (filterSelect) {
+        const myName = getMemberShortName(state.currentMember);
         filterSelect.innerHTML = `
           <option value="ALL">Tất cả Thành viên HĐ</option>
-          <option value="MINE">Chỉ ý kiến của tôi (${getMemberShortName(state.currentMember)})</option>
+          <option value="MINE">Chỉ ý kiến của tôi (${myName || 'Tôi'})</option>
           ${COUNCIL_MEMBERS.map(m => `<option value="${m.name}">${m.name} (${m.role})</option>`).join('')}
         `;
         filterSelect.addEventListener('change', (e) => {
@@ -1892,15 +1991,18 @@
         });
       }
 
-      if (topSelect) topSelect.value = state.currentMember;
+      if (topSelect) topSelect.value = state.currentMember || '';
       if (modalSelect) {
-        modalSelect.value = state.currentMember;
+        modalSelect.value = state.currentMember || '';
         modalSelect.disabled = true; // Permanently locked to authenticated user
       }
-      if (authSelect) authSelect.value = state.currentMember;
 
       if (hdrLbl) {
-        hdrLbl.textContent = `${getMemberShortName(state.currentMember)} (${getMemberRole(state.currentMember)})`;
+        if (state.currentMember) {
+          hdrLbl.textContent = `${getMemberShortName(state.currentMember)} (${getMemberRole(state.currentMember)})`;
+        } else {
+          hdrLbl.textContent = 'Chưa xác thực';
+        }
       }
 
       const pickerSelect = document.getElementById('modalTaskPickerSelect');
@@ -2609,6 +2711,9 @@
           if (parsedAS.intervalSec) state.autoSyncIntervalSec = Number(parsedAS.intervalSec);
         } catch (e) {}
       }
+      // 1. Phục hồi trạng thái xác thực Thành viên Hội đồng trước khi khởi tạo UI
+      initAuthSession();
+      // 2. Đồng bộ các điều khiển và phân quyền theo đúng Thành viên đã xác thực
       populateCouncilSelects();
       applyRoleBasedPermissions();
       populateFilterDropdowns();
@@ -2736,38 +2841,8 @@
         }
       });
 
-      // Authentication Gate Setup
+      // Authentication Gate Setup & Form Handlers
       const authOverlay = document.getElementById('authGateOverlay');
-      const savedAuth = readMultiStorage(STORAGE_KEY_AUTH);
-      if (savedAuth) {
-        try {
-          const parsedAuth = JSON.parse(savedAuth);
-          if (parsedAuth && parsedAuth.authenticated) {
-            const loginTime = parsedAuth.loginTime || 0;
-            const elapsed = Date.now() - loginTime;
-            if (elapsed < SESSION_DURATION_MS) {
-              state.isAuthenticated = true;
-              state.loginTime = loginTime;
-              if (parsedAuth.member) {
-                state.currentMember = parsedAuth.member;
-                document.getElementById('activeCouncilMember').value = parsedAuth.member;
-              }
-              authOverlay.classList.add('hidden');
-              authOverlay.classList.remove('flex');
-              startSessionTimer();
-            } else {
-              // Session expired
-              state.isAuthenticated = false;
-              writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({ authenticated: false }));
-              const errEl = document.getElementById('authErrorMsg');
-              if (errEl) {
-                errEl.textContent = '⏱️ Phiên làm việc trước đó đã hết hạn (tối đa 20 phút). Vui lòng đăng nhập lại!';
-                errEl.classList.remove('hidden');
-              }
-            }
-          }
-        } catch (e) {}
-      }
 
       const btnToggleAuth = document.getElementById('btnToggleAuthPass');
       if (btnToggleAuth) {
@@ -2791,9 +2866,16 @@
         authForm.addEventListener('submit', (e) => {
           e.preventDefault();
           const chosenMember = document.getElementById('authMemberSelect').value;
+          const errEl = document.getElementById('authErrorMsg');
+
+          if (!chosenMember) {
+            errEl.textContent = '⚠️ Vui lòng chọn đúng tên Thành viên Hội đồng của bạn!';
+            errEl.classList.remove('hidden');
+            return;
+          }
+
           const inp = document.getElementById('authPasswordInput');
           const enteredPass = inp ? inp.value.trim() : '';
-          const errEl = document.getElementById('authErrorMsg');
 
           let isMatch = false;
           if (isAdmin(chosenMember)) {
@@ -2821,30 +2903,34 @@
 
           if (isMatch) {
             errEl.classList.add('hidden');
+            const rememberMe = document.getElementById('authRememberSession').checked;
+            const nowTimeMs = Date.now();
+
             state.isAuthenticated = true;
             state.currentMember = chosenMember;
-            const nowTimeMs = Date.now();
             state.loginTime = nowTimeMs;
+            state.rememberMe = rememberMe;
+
+            // Lưu trạng thái đăng nhập và định danh thành viên của máy này
+            writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({
+              authenticated: true,
+              member: chosenMember,
+              loginTime: nowTimeMs,
+              rememberMe: rememberMe
+            }));
+            writeMultiStorage(STORAGE_KEY_LAST_MEMBER, chosenMember);
+
             startSessionTimer();
 
-            const hdrLbl = document.getElementById('headerCurrentMemberLabel');
-            if (hdrLbl) {
-              hdrLbl.textContent = `${getMemberShortName(chosenMember)} (${getMemberRole(chosenMember)})`;
-            }
-            const topSelect = document.getElementById('activeCouncilMember');
-            if (topSelect) topSelect.value = chosenMember;
-            const formRev = document.getElementById('formReviewer');
-            if (formRev) formRev.value = chosenMember;
-
-            if (document.getElementById('authRememberSession').checked) {
-              writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({ authenticated: true, member: chosenMember, loginTime: nowTimeMs }));
-            }
             authOverlay.classList.add('hidden');
             authOverlay.classList.remove('flex');
+
+            // Cập nhật lại toàn bộ giao diện, huy hiệu và dữ liệu theo tài khoản vừa đăng nhập
             populateCouncilSelects();
             applyRoleBasedPermissions();
             renderTasksTable();
             renderReviewsTable();
+
             showToast(isAdmin(chosenMember)
               ? 'Xin chào Chuyên viên KH-CN! Đăng nhập thành công với quyền Quản trị viên cao nhất.'
               : `Xin chào ${getMemberShortName(chosenMember)}! Đã mở khóa phiên xét duyệt.`);
@@ -2854,12 +2940,39 @@
 
       document.getElementById('btnLockSession').addEventListener('click', () => {
         state.isAuthenticated = false;
-        writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({ authenticated: false }));
+        writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({
+          authenticated: false,
+          member: state.currentMember
+        }));
+        if (state.currentMember) {
+          writeMultiStorage(STORAGE_KEY_LAST_MEMBER, state.currentMember);
+        }
         document.getElementById('authPasswordInput').value = '';
         authOverlay.classList.remove('hidden');
         authOverlay.classList.add('flex');
+
+        populateCouncilSelects();
         applyRoleBasedPermissions();
-        showToast('Đã khóa phiên làm việc. Vui lòng chọn tài khoản và nhập mật khẩu để đăng nhập.');
+        showToast('Đã khóa phiên làm việc. Vui lòng nhập mật khẩu để tiếp tục.');
+      });
+
+      // Lắng nghe thao tác để tự động duy trì phiên làm việc không bị gián đoạn khi đang làm việc
+      ['click', 'keydown', 'scroll', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, () => {
+          const now = Date.now();
+          if (!window._lastActivityTouch || now - window._lastActivityTouch > 30000) {
+            window._lastActivityTouch = now;
+            if (state.isAuthenticated && state.rememberMe) {
+              state.loginTime = now;
+              writeMultiStorage(STORAGE_KEY_AUTH, JSON.stringify({
+                authenticated: true,
+                member: state.currentMember,
+                loginTime: now,
+                rememberMe: true
+              }));
+            }
+          }
+        }, { passive: true });
       });
 
       // Sync & Security Config Modal Setup
